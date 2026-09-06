@@ -41,10 +41,28 @@ def build_retriever(
     guides_retriever  = guides_store.as_retriever(search_kwargs={"k": k_guides})
 
     def retrieve(query: str) -> list[Document]:
-        return (
+        documents = (
             faq_retriever.invoke(query)
             + tickets_retriever.invoke(query)
             + guides_retriever.invoke(query)
         )
+
+        unique_documents = []
+        seen_documents = set()
+
+        for document in documents:
+            metadata = document.metadata
+            document_key = (
+                metadata.get("source"),
+                metadata.get("ticket_id"),
+                metadata.get("chunk_index"),
+                document.page_content,
+            )
+
+            if document_key not in seen_documents:
+                seen_documents.add(document_key)
+                unique_documents.append(document)
+
+        return unique_documents
 
     return RunnableLambda(retrieve)

@@ -1,4 +1,6 @@
 import os
+import csv
+
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
 import streamlit as st
@@ -10,15 +12,25 @@ from retriever import build_retriever
 
 load_dotenv()
 
-SAMPLE_QUESTIONS = [
-    "Why is my mobile internet so slow?",
-    "My calls keep dropping — what should I do?",
-    "How do I activate international roaming?",
-    "Why is my bill higher than usual this month?",
-    "My phone shows SIM not detected after a restart",
-    "How do I enable Wi-Fi calling?",
-    "I was charged for roaming but had a bundle active",
-    "How do I unlock my phone for another network?",
+FAQ_PATH = os.path.join(os.path.dirname(__file__), "data", "faq.csv")
+
+
+def load_faqs():
+    with open(FAQ_PATH, newline="", encoding="utf-8") as faq_file:
+        return list(csv.DictReader(faq_file))
+
+
+FAQS = load_faqs()
+FAQ_ANSWERS = {
+    faq["question"]: faq["answer"]
+    for faq in FAQS
+}
+SAMPLE_QUESTIONS = [faq["question"] for faq in FAQS]
+WELCOME_QUESTIONS = [
+    FAQS[1],
+    FAQS[5],
+    FAQS[8],
+    FAQS[15],
 ]
 
 st.set_page_config(
@@ -99,10 +111,13 @@ def get_document_label(doc):
 
     metadata = doc.metadata
 
-    source = metadata.get(
-        "source",
-        metadata.get("type", "Unknown")
-    )
+    source = metadata.get("source", metadata.get("type", "Unknown"))
+
+    if source == "guide":
+        return "Telecom guide PDF"
+    if source == "ticket":
+        ticket_id = metadata.get("ticket_id")
+        return f"Resolved ticket {ticket_id}" if ticket_id else "Resolved ticket"
 
     return str(source).replace("_", " ").title()
 
@@ -163,9 +178,9 @@ with st.sidebar:
     st.markdown("**Quick questions**")
     st.caption("Click one to send it instantly.")
 
-    for q in SAMPLE_QUESTIONS:
-        if st.button(q, use_container_width=True):
-            st.session_state.pending_question = q
+    for faq in FAQS:
+        if st.button(faq["question"], use_container_width=True):
+            st.session_state.pending_question = faq["question"]
 
     st.divider()
 
@@ -202,43 +217,24 @@ if not st.session_state.messages:
 
     with col1:
 
-        if st.button(
-            "📶 My internet isn't working",
-            use_container_width=True
-        ):
-            st.session_state.pending_question = \
-                "My mobile internet isn't working"
-
-            st.rerun()
-
-        if st.button(
-            "💳 I have a billing question",
-            use_container_width=True
-        ):
-            st.session_state.pending_question = \
-                "I have a question about my bill"
-
-            st.rerun()
+        for index, faq in enumerate(WELCOME_QUESTIONS[:2]):
+            if st.button(
+                faq["question"],
+                key=f"welcome_question_{index}",
+                use_container_width=True
+            ):
+                st.session_state.pending_question = faq["question"]
+                st.rerun()
 
     with col2:
-
-        if st.button(
-            "📱 My SIM isn't working",
-            use_container_width=True
-        ):
-            st.session_state.pending_question = \
-                "My SIM isn't working"
-                
-            st.rerun()
-
-        if st.button(
-            "🌐 I'm having 5G issues",
-            use_container_width=True
-        ):
-            st.session_state.pending_question = \
-                "I'm having problems with 5G"
-
-            st.rerun()
+        for index, faq in enumerate(WELCOME_QUESTIONS[2:], start=2):
+            if st.button(
+                faq["question"],
+                key=f"welcome_question_{index}",
+                use_container_width=True
+            ):
+                st.session_state.pending_question = faq["question"]
+                st.rerun()
 
 for msg in st.session_state.messages:
 
@@ -303,13 +299,18 @@ if question:
         st.markdown(question)
 
 
-    # ADDED ── Retrieve documents for displaying sources
-    retriever = get_retriever()
+    faq_answer = FAQ_ANSWERS.get(question)
 
-    try:
-        retrieved_docs = retriever.invoke(question)
-    except Exception:
+    if faq_answer:
         retrieved_docs = []
+    else:
+        # Retrieve documents for displaying sources for free-form questions.
+        retriever = get_retriever()
+
+        try:
+            retrieved_docs = retriever.invoke(question)
+        except Exception:
+            retrieved_docs = []
 
 
     # ADDED ── Separate sources and similar support tickets
@@ -330,12 +331,14 @@ if question:
 
 
     with st.chat_message("assistant"):
-
-        chain = get_chain()
-
-        response = st.write_stream(
-            chain.stream(question)
-        )
+        if faq_answer:
+            response = faq_answer
+            st.markdown(response)
+        else:
+            chain = get_chain()
+            response = st.write_stream(
+                chain.stream(question)
+            )
 
 
         # ADDED ── Display retrieved sources
